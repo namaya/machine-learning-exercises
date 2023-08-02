@@ -24,7 +24,7 @@ struct GenerateBody<'r> {
 }
 
 #[post("/generate", data="<body>")]
-fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![&'static str] {
+fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![String] {
     let cookie = jar.get(SESSION_COOKIE_NAME);
 
     let history = if let Some(cookie) = cookie {
@@ -37,7 +37,7 @@ fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![&'
             }
         }
     } else {
-        let session_id = Uuid::new_v4();
+        let session_id: Uuid = Uuid::new_v4();
 
         jar.add(Cookie::new(SESSION_COOKIE_NAME, session_id.to_string()));
 
@@ -46,7 +46,7 @@ fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![&'
         if path.exists() {
             panic!("Writing new session history but session already exists...")
         } else {
-            let history = "";
+            let history = "Some chat session history...";
 
             fs::write(path, history)
                 .expect("error while writing to fs.");
@@ -55,21 +55,13 @@ fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![&'
         }
     };
 
-    println!("{history}");
-
     TextStream! {
         let mut interval = interval(Duration::from_secs(1));
 
-        loop {
-            yield "hello\n";
+        for token in history.split_whitespace() {
+            yield token.to_string();
             interval.tick().await;
         }
-
-        // history.split_whitespace()
-        //     .map_async(|token| {
-        //         token
-        //     })
-
     }
 }
 
