@@ -1,19 +1,24 @@
-#[macro_use] extern crate rocket;
+#[macro_use]
+extern crate rocket;
+
+mod appsettings;
+mod chatbot;
 
 use std::fs;
 use std::path::Path;
 
-use rocket::http::{CookieJar, Cookie};
-use rocket::tokio::time::{Duration, interval};
+use rocket::fairing::AdHoc;
+use rocket::http::{Cookie, CookieJar};
 use rocket::response::stream::TextStream;
-use rocket::serde::{Deserialize, json::Json};
+use rocket::serde::{json::Json, Deserialize};
+use rocket::tokio::time::{interval, Duration};
+use rocket::{Config, State};
 use uuid::Uuid;
 
-const SESSION_COOKIE_NAME: &str = "chat-session-id";
-const SESSION_DATA_DIR: &str = "/tmp/chat-sessions";
+use appsettings::AppSettings;
 
 #[get("/")]
-fn index() -> &'static str { 
+fn index() -> &'static str {
     "Hello, world!"
 }
 
@@ -23,13 +28,17 @@ struct GenerateBody<'r> {
     prompt: &'r str,
 }
 
-#[post("/generate", data="<body>")]
-fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![String] {
-    let cookie = jar.get(SESSION_COOKIE_NAME);
+#[post("/chat", data = "<body>")]
+fn generate(
+    body: Json<GenerateBody<'_>>,
+    jar: &CookieJar<'_>,
+    appsettings: &State<AppSettings>,
+) -> TextStream![String] {
+    let cookie = jar.get(&appsettings.session_cookie_name);
 
     let history = if let Some(cookie) = cookie {
         let sess_id_str = cookie.value();
-        let path = Path::new(SESSION_DATA_DIR).join(sess_id_str);
+        let path = Path::new(&appsettings.session_data_dir).join(sess_id_str);
         match fs::read_to_string(path) {
             Ok(history) => history,
             Err(error) => {
@@ -39,17 +48,19 @@ fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![St
     } else {
         let session_id: Uuid = Uuid::new_v4();
 
-        jar.add(Cookie::new(SESSION_COOKIE_NAME, session_id.to_string()));
+        jar.add(Cookie::new(
+            appsettings.session_cookie_name.clone(),
+            session_id.to_string(),
+        ));
 
-        let path = Path::new(SESSION_DATA_DIR).join(session_id.to_string());
+        let path = Path::new(&appsettings.session_data_dir).join(session_id.to_string());
 
         if path.exists() {
             panic!("Writing new session history but session already exists...")
         } else {
             let history = "Some chat session history...";
 
-            fs::write(path, history)
-                .expect("error while writing to fs.");
+            fs::write(path, history).expect("error while writing to fs.");
 
             String::from(history)
         }
@@ -67,7 +78,10 @@ fn generate(body: Json<GenerateBody<'_>>, jar: &CookieJar<'_>) -> TextStream![St
 
 #[launch]
 fn rocket() -> _ {
+    // let chatbot = chatbot::load().unwrap_or_else(|err| panic!("Failed to load model: {err}"));
+
     rocket::build()
         .mount("/", routes![index])
         .mount("/api", routes![generate])
+        .attach(AdHoc::config::<AppSettings>())
 }

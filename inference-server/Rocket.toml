@@ -1,0 +1,4 @@
+[default]
+session_cookie_name = "chat-session-id"
+session_data_dir = "/tmp/chat-sessions"
+chatbot_path = "./models/bloomz"
