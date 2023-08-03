@@ -6,16 +6,18 @@ mod chatbot;
 
 use std::fs;
 use std::path::Path;
+use std::str;
 
 use rocket::fairing::AdHoc;
+use rocket::futures::stream::Stream;
 use rocket::http::{Cookie, CookieJar};
 use rocket::response::stream::TextStream;
 use rocket::serde::{json::Json, Deserialize};
-use rocket::tokio::time::{interval, Duration};
-use rocket::{Config, State};
+use rocket::State;
 use uuid::Uuid;
 
 use appsettings::AppSettings;
+use chatbot::Chatbot;
 
 #[get("/")]
 fn index() -> &'static str {
@@ -29,11 +31,12 @@ struct GenerateBody<'r> {
 }
 
 #[post("/chat", data = "<body>")]
-fn generate(
-    body: Json<GenerateBody<'_>>,
+fn generate<'a>(
+    body: Json<GenerateBody<'a>>,
     jar: &CookieJar<'_>,
     appsettings: &State<AppSettings>,
-) -> TextStream![String] {
+    chatbot: &'a State<Chatbot>,
+) -> TextStream<impl Stream<Item = String> + 'a> {
     let cookie = jar.get(&appsettings.session_cookie_name);
 
     let history = if let Some(cookie) = cookie {
@@ -67,21 +70,33 @@ fn generate(
     };
 
     TextStream! {
-        let mut interval = interval(Duration::from_secs(1));
-
-        for token in history.split_whitespace() {
-            yield token.to_string();
-            interval.tick().await;
+        for await token in chatbot.generate(body.prompt, &history) {
+            let token = token.clone();
+            yield String::from_utf8(token)
+                .unwrap_or_else(|err| {
+                    println!("error decoding response -- {}", err);
+                    String::from("\n")
+                });
         }
     }
 }
 
 #[launch]
 fn rocket() -> _ {
-    // let chatbot = chatbot::load().unwrap_or_else(|err| panic!("Failed to load model: {err}"));
-
-    rocket::build()
+    let app = rocket::build()
         .mount("/", routes![index])
         .mount("/api", routes![generate])
-        .attach(AdHoc::config::<AppSettings>())
+        .attach(AdHoc::config::<AppSettings>());
+
+    let app_settings: AppSettings = app.figment().extract().unwrap();
+
+    let chatbot = Chatbot::load(
+        &app_settings.chatbot_path,
+        &app_settings.chatbot_tokenizer_path,
+    )
+    .unwrap_or_else(|err| panic!("Failed to load model: {err}"));
+
+    let app = app.manage(chatbot);
+
+    app
 }
